@@ -5,6 +5,9 @@ import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.filechooser.FileSystemView;
 import java.awt.*;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.*;
@@ -58,16 +61,30 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         fileChooser = new JFileChooser(homeDir, fsv);
         fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
         inSrcDir = new JTextField();
-        inSrcDir.setEnabled(false);
+        inSrcDir.setEnabled(true);
+        inSrcDir.setEditable(false);
         inSrcDir.setBounds(10, 10, 350, 30);
+        inSrcDir.setTransferHandler(new DirectoryTransferHandler(dir -> {
+            inSrcDir.setText(dir);
+            srcDir = new File(dir);
+            fillInData();
+        }));
 
         selectSrcBtn = new JButton("选择图片目录");
         selectSrcBtn.setBounds(355, 10, 150, 30);
         selectSrcBtn.addActionListener(this);
 
         outResDirTx = new JTextField();
-        outResDirTx.setEnabled(false);
+        outResDirTx.setEnabled(true);
+        outResDirTx.setEditable(false);
         outResDirTx.setBounds(10, 45, 350, 30);
+        outResDirTx.setTransferHandler(new DirectoryTransferHandler(new OnDirectoryTransfer() {
+            @Override
+            public void onTransfer(String dir) {
+                File file = new File(dir);
+                fillOutData(file);
+            }
+        }));
 
         selectOutBtn = new JButton("目标res目录");
         selectOutBtn.setBounds(355, 45, 150, 30);
@@ -121,6 +138,67 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         setVisible(true);
     }
 
+    private void fillInData() {
+        listAdapter.clear();
+        fileNames.clear();
+        showNames.clear();
+        imageView.setIcon(null);
+        outImageName.setText("");
+        File[] files = srcDir.listFiles(new FileFilter() {
+            @Override
+            public boolean accept(File pathname) {
+                if (pathname.isDirectory()) return false;
+                String name = pathname.getName();
+                int index = name.lastIndexOf(".");
+                if (index < 0) return false;
+                String suffix = name.substring(index + 1);
+                switch (suffix) {
+                    case "png":
+                    case "jpg":
+                    case "jpeg":
+                        return match(name.substring(0, index));
+                    default:
+                        return false;
+                }
+            }
+
+            private boolean match(String name) {
+                return name.endsWith("@2x") || name.endsWith("@3x");
+            }
+        });
+
+        if (files == null) return;
+        for (File file : files) {
+            String name = file.getName();
+            String substring = name.substring(0, name.lastIndexOf("@"));
+            log("found " + file.toString());
+            if (listAdapter.contains(substring)) {
+                int indexOf = listAdapter.indexOf(substring);
+                IPair<String, String> pair = fileNames.get(indexOf);
+                pair.second = name;
+                continue;
+            }
+            IPair<String, String> pair = new IPair<>();
+            pair.first = name;
+            fileNames.add(pair);
+            showNames.add(name);
+            listAdapter.addElement(substring);
+        }
+        listView.setModel(listAdapter);
+    }
+
+    private void fillOutData(File dir) {
+        outDrawableXh = new File(dir, "drawable-xhdpi");
+        outDrawableXxh = new File(dir, "drawable-xxhdpi");
+        if (outDrawableXxh.exists()
+                && outDrawableXxh.isDirectory()
+                || outDrawableXh.exists()
+                && outDrawableXh.isDirectory()) {
+            outResDir = dir;
+            outResDirTx.setText(outResDir.getAbsolutePath());
+        }
+    }
+
     @Override
     public void actionPerformed(ActionEvent e) {
         Object source = e.getSource();
@@ -136,50 +214,7 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
             } else {
                 srcDir = fileChooser.getSelectedFile();
                 inSrcDir.setText(srcDir.getAbsolutePath());
-                listAdapter.clear();
-                fileNames.clear();
-                showNames.clear();
-                File[] files = srcDir.listFiles(new FileFilter() {
-                    @Override
-                    public boolean accept(File pathname) {
-                        if (pathname.isDirectory()) return false;
-                        String name = pathname.getName();
-                        int index = name.lastIndexOf(".");
-                        if (index < 0) return false;
-                        String suffix = name.substring(index + 1);
-                        switch (suffix) {
-                            case "png":
-                            case "jpg":
-                            case "jpeg":
-                                return match(name.substring(0, index));
-                            default:
-                                return false;
-                        }
-                    }
-
-                    private boolean match(String name) {
-                        return name.endsWith("@2x") || name.endsWith("@3x");
-                    }
-                });
-
-                if (files == null) return;
-                for (File file : files) {
-                    String name = file.getName();
-                    String substring = name.substring(0, name.lastIndexOf("@"));
-                    log("found " + file.toString());
-                    if (listAdapter.contains(substring)) {
-                        int indexOf = listAdapter.indexOf(substring);
-                        IPair<String, String> pair = fileNames.get(indexOf);
-                        pair.second = name;
-                        continue;
-                    }
-                    IPair<String, String> pair = new IPair<>();
-                    pair.first = name;
-                    fileNames.add(pair);
-                    showNames.add(name);
-                    listAdapter.addElement(substring);
-                }
-                listView.setModel(listAdapter);
+                fillInData();
             }
         }
         if (source.equals(selectOutBtn)) {
@@ -193,15 +228,7 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
                 return;
             } else {
                 File dir = fileChooser.getSelectedFile();
-                outDrawableXh = new File(dir, "drawable-xhdpi");
-                outDrawableXxh = new File(dir, "drawable-xxhdpi");
-                if (outDrawableXxh.exists()
-                        && outDrawableXxh.isDirectory()
-                        || outDrawableXh.exists()
-                        && outDrawableXh.isDirectory()) {
-                    outResDir = dir;
-                    outResDirTx.setText(outResDir.getAbsolutePath());
-                }
+                fillOutData(dir);
             }
         }
         if (source.equals(copyBtn)) {
@@ -267,6 +294,7 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
     public void valueChanged(ListSelectionEvent e) {
         if (!e.getValueIsAdjusting()) {
             int index = listView.getSelectedIndex();
+            if (index < 0 || index >= listAdapter.size()) return;
             selectedIndex = index;
             String fileName = showNames.get(index);
             File img = new File(srcDir, fileName);
@@ -292,5 +320,70 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
 
     private void log(String msg) {
         logArea.append(msg + "\r\n\r\n");
+    }
+
+    private interface OnDirectoryTransfer {
+        void onTransfer(String dir);
+    }
+
+    private static class DirectoryTransferHandler extends TransferHandler {
+
+        private OnDirectoryTransfer transfer;
+
+        private DirectoryTransferHandler(OnDirectoryTransfer transfer) {
+            this.transfer = transfer;
+        }
+
+        @Override
+        public boolean canImport(JComponent comp, DataFlavor[] flavors) {
+            for (DataFlavor flavor : flavors) {
+                if (DataFlavor.javaFileListFlavor.equals(flavor)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public boolean importData(JComponent comp, Transferable t) {
+            try {
+                Object o = t.getTransferData(DataFlavor.javaFileListFlavor);
+
+                String filepath = o.toString();
+                if (filepath.startsWith("[")) {
+                    filepath = filepath.substring(1);
+                }
+                if (filepath.endsWith("]")) {
+                    filepath = filepath.substring(0, filepath.length() - 1);
+                }
+                if (filepath.contains(",")) {
+                    boolean hasDir = false;
+                    String[] split = filepath.split(",");
+                    for (String per : split) {
+                        System.out.println("per " + per);
+                        File file = new File(per.trim());
+                        if (file.isDirectory()) {
+                            filepath = per;
+                            hasDir = true;
+                            break;
+                        }
+                    }
+                    if (!hasDir) {
+                        return false;
+                    }
+                } else {
+                    File file = new File(filepath);
+                    if (file.isFile()) {
+                        return false;
+                    }
+                }
+                System.out.println(filepath);
+                transfer.onTransfer(filepath);
+                return true;
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return false;
+        }
     }
 }
