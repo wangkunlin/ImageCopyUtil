@@ -1,5 +1,10 @@
 package com.image.copy;
 
+import org.apache.commons.io.monitor.FileAlterationListener;
+import org.apache.commons.io.monitor.FileAlterationListenerAdaptor;
+import org.apache.commons.io.monitor.FileAlterationMonitor;
+import org.apache.commons.io.monitor.FileAlterationObserver;
+
 import javax.swing.*;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
@@ -7,9 +12,10 @@ import javax.swing.filechooser.FileSystemView;
 import java.awt.*;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
-import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.*;
 import java.util.ArrayList;
 
@@ -37,6 +43,11 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
     private String homeDir;
     private int selectedIndex = -1;
     private JTextArea logArea;
+    private final JButton refreshBtn;
+    private final JCheckBox deleteAfterCopy;
+    private FileAlterationListener fileChangeListener = new FileChanged();
+    private FileAlterationMonitor alterationMonitor;
+    private FileAlterationObserver alterationObserver;
 
     MainFrame() throws HeadlessException {
         super("图片拷贝工具--by 王坤林");
@@ -67,6 +78,7 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         inSrcDir.setTransferHandler(new DirectoryTransferHandler(dir -> {
             inSrcDir.setText(dir);
             srcDir = new File(dir);
+            listenDir();
             fillInData();
         }));
 
@@ -78,12 +90,9 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         outResDirTx.setEnabled(true);
         outResDirTx.setEditable(false);
         outResDirTx.setBounds(10, 45, 350, 30);
-        outResDirTx.setTransferHandler(new DirectoryTransferHandler(new OnDirectoryTransfer() {
-            @Override
-            public void onTransfer(String dir) {
-                File file = new File(dir);
-                fillOutData(file);
-            }
+        outResDirTx.setTransferHandler(new DirectoryTransferHandler(dir -> {
+            File file = new File(dir);
+            fillOutData(file);
         }));
 
         selectOutBtn = new JButton("目标res目录");
@@ -102,6 +111,10 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         imageView.setBounds(110, 75, 300, 300);
         imageView.setBorder(BorderFactory.createTitledBorder("图片预览"));
 
+        refreshBtn = new JButton("刷新");
+        refreshBtn.setBounds(410, 75, 100, 30);
+        refreshBtn.addActionListener(this);
+
         JLabel nameLabel = new JLabel("改名");
         nameLabel.setBounds(10, 380, 50, 30);
 
@@ -111,6 +124,9 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         copyBtn = new JButton("拷贝到目标");
         copyBtn.setBounds(70, 420, 100, 50);
         copyBtn.addActionListener(this);
+
+        deleteAfterCopy = new JCheckBox("拷贝完成后删除图片", true);
+        deleteAfterCopy.setBounds(170, 430, 150, 30);
 
         logArea = new JTextArea();
         logArea.setEditable(false);
@@ -131,9 +147,25 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         container.add(selectSrcBtn);
         container.add(outResDirTx);
         container.add(selectOutBtn);
+        container.add(refreshBtn);
+        container.add(deleteAfterCopy);
         setSize(windowWidth, windowHeight);
         setLocation(x, y);
         setResizable(false);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                if (alterationMonitor != null) {
+                    try {
+                        alterationMonitor.stop();
+                    } catch (Exception e1) {
+                        e1.printStackTrace();
+                    }
+                    alterationObserver.removeListener(fileChangeListener);
+                    alterationMonitor.removeObserver(alterationObserver);
+                }
+            }
+        });
         setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         setVisible(true);
     }
@@ -144,6 +176,9 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         showNames.clear();
         imageView.setIcon(null);
         outImageName.setText("");
+        if (srcDir == null) {
+            return;
+        }
         File[] files = srcDir.listFiles(new FileFilter() {
             @Override
             public boolean accept(File pathname) {
@@ -214,6 +249,7 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
             } else {
                 srcDir = fileChooser.getSelectedFile();
                 inSrcDir.setText(srcDir.getAbsolutePath());
+                listenDir();
                 fillInData();
             }
         }
@@ -241,11 +277,58 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
             IPair<String, String> pair = fileNames.get(selectedIndex);
             copy(pair.first, text);
             copy(pair.second, text);
+            if (deleteAfterCopy.isSelected()) { // 删除图片
+                deleteFile(pair);
+                listAdapter.remove(selectedIndex);
+                selectedIndex = -1;
+                fillInData();
+            }
+        }
+        if (source.equals(refreshBtn)) {
+            fillInData();
         }
     }
 
+    private void listenDir() {
+        if (srcDir == null) {
+            return;
+        }
+        if (alterationMonitor == null) {
+            alterationMonitor = new FileAlterationMonitor(1000);
+        }
+        if (alterationObserver != null) {
+            alterationObserver.removeListener(fileChangeListener);
+            alterationMonitor.removeObserver(alterationObserver);
+        }
+        alterationObserver = new FileAlterationObserver(srcDir);
+        alterationObserver.addListener(fileChangeListener);
+
+        alterationMonitor.addObserver(alterationObserver);
+        try {
+            alterationMonitor.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private class FileChanged extends FileAlterationListenerAdaptor {
+        @Override
+        public void onFileCreate(File file) {
+            SwingUtilities.invokeLater(MainFrame.this::fillInData);
+        }
+    }
+
+    private void deleteFile(IPair<String, String> pair) {
+        delete(pair.first);
+        delete(pair.second);
+    }
+
+    private void delete(String name) {
+        File file = new File(srcDir, name);
+        file.delete();
+    }
+
     private void copy(String name, String rename) {
-        System.out.println("from " + name + " to " + rename);
         if (name == null) return;
         int index = name.lastIndexOf("@") + 1;
         char c = name.charAt(index);
@@ -261,12 +344,11 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
         }
 
         if (dst == null) return;
-        System.out.println(dst.toString());
 
         File source = new File(srcDir, name);
-        System.out.println("source " + source.toString());
+
         File target = new File(dst, rename + suffix);
-        System.out.println("dst " + target.toString());
+
         if (target.exists()) {
             target.delete();
         }
@@ -360,7 +442,6 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
                     boolean hasDir = false;
                     String[] split = filepath.split(",");
                     for (String per : split) {
-                        System.out.println("per " + per);
                         File file = new File(per.trim());
                         if (file.isDirectory()) {
                             filepath = per;
@@ -377,7 +458,6 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
                         return false;
                     }
                 }
-                System.out.println(filepath);
                 transfer.onTransfer(filepath);
                 return true;
             } catch (Exception e) {
