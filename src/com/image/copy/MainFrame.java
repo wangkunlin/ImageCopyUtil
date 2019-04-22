@@ -198,14 +198,19 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
             }
 
             private boolean match(String name) {
-                return name.endsWith("@2x") || name.endsWith("@3x");
+                return name.endsWith("@2x") || name.endsWith("@3x")
+                        || name.endsWith("_xhdpi") || name.endsWith("_xxhdpi");
             }
         });
 
         if (files == null) return;
         for (File file : files) {
             String name = file.getName();
-            String substring = name.substring(0, name.lastIndexOf("@"));
+            int index = name.lastIndexOf("@");
+            if (index < 0) {
+                index = name.lastIndexOf("_");
+            }
+            String substring = name.substring(0, index);
             log("found " + file.toString());
             if (listAdapter.contains(substring)) {
                 int indexOf = listAdapter.indexOf(substring);
@@ -330,18 +335,35 @@ class MainFrame extends JFrame implements ActionListener, ListSelectionListener 
 
     private void copy(String name, String rename) {
         if (name == null) return;
-        int index = name.lastIndexOf("@") + 1;
-        char c = name.charAt(index);
-        String suffix = name.substring(name.lastIndexOf("."));
-        File dst = null;
-        switch (c) {
-            case '2':
-                dst = outDrawableXh;
-                break;
-            case '3':
-                dst = outDrawableXxh;
-                break;
+        boolean _mode = false;
+        int index = name.lastIndexOf("@");
+        if (index < 0) {
+            index = name.lastIndexOf("_");
+            _mode = true;
         }
+        File dst = null;
+
+        if (_mode) {
+            String subName = name.substring(index);
+            if (subName.contains("_xhdpi")) {
+                dst = outDrawableXh;
+            } else if (subName.contains("_xxhdpi")) {
+                dst = outDrawableXxh;
+            }
+        } else {
+            index += 1;
+            char c = name.charAt(index);
+            switch (c) {
+                case '2':
+                    dst = outDrawableXh;
+                    break;
+                case '3':
+                    dst = outDrawableXxh;
+                    break;
+            }
+        }
+
+        String suffix = name.substring(name.lastIndexOf("."));
 
         if (dst == null) return;
 
